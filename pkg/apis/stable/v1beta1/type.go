@@ -15,6 +15,7 @@ type Redis struct {
 	Spec              RedisSpec `json:"spec"`
 }
 
+// RedisSpec redis的相关参数
 type RedisSpec struct {
 	Image      string `json:"image"`
 	Port       int    `json:"port"`
@@ -24,6 +25,7 @@ type RedisSpec struct {
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
+// RedisList redis的List
 type RedisList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

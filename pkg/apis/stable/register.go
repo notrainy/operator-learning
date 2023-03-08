@@ -1,6 +1,8 @@
 package stable
 
 const (
+	// GroupName 组名
 	GroupName = "stable.example.com"
-	Version   = "v1beta1"
+	// Version 版本
+	Version = "v1beta1"
 )
