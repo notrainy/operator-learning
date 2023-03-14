@@ -17,10 +17,12 @@ type Redis struct {
 
 // RedisSpec redis的相关参数
 type RedisSpec struct {
-	Image      string `json:"image"`
-	Port       int    `json:"port"`
-	TargetPort int    `json:"targetPort"`
-	Password   string `json:"password"`
+	Image          string `json:"image"`
+	Port           int    `json:"port"`
+	TargetPort     int    `json:"targetPort"`
+	Password       string `json:"password"`
+	DeploymentName string `json:"deploymentName"`
+	Replicas       *int32 `json:"replicas"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

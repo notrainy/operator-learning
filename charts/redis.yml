@@ -3,7 +3,7 @@ kind: Redis
 metadata:
   name: redis-cluster
 spec:
-  image: redis:latest
+  image: busybox:latest
   port: 6379
   targetPort: 16379
-  password: xxx
+  password: abcde

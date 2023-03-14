@@ -3,7 +3,9 @@ package external
 import (
 	"context"
 	"fmt"
+	"time"
 
+	customapis "github.com/notrainy/operator-learning/pkg/apis/stable/v1beta1"
 	"github.com/notrainy/operator-learning/pkg/consts"
 	customClient "github.com/notrainy/operator-learning/pkg/generated/clientset/versioned"
 	customscheme "github.com/notrainy/operator-learning/pkg/generated/clientset/versioned/scheme"
@@ -12,8 +14,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	appsinformers "k8s.io/client-go/informers/apps/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -118,6 +122,33 @@ func NewController(
 	return controller
 }
 
+// Run controller执行
+func (c *Controller) Run(ctx context.Context, workers int) error {
+	defer utilruntime.HandleCrash()
+	defer c.workqueue.ShutDown()
+	logger := klog.FromContext(ctx)
+
+	if ok := cache.WaitForCacheSync(ctx.Done(), c.deploymentSynced, c.customResourceSynced); !ok {
+		return fmt.Errorf("failed to wait for cache to sync")
+	}
+
+	logger.Info("starting workers")
+	for i := 0; i < workers; i++ {
+		go wait.UntilWithContext(ctx, c.runWorker, time.Second)
+	}
+
+	logger.Info("started workers")
+	<-ctx.Done()
+	logger.Info("shutdown workers")
+
+	return nil
+}
+
+func (c *Controller) runWorker(ctx context.Context) {
+	for c.processNextWorkItem(ctx) {
+	}
+}
+
 // enqueueCRD takes a CRD resource and converts it into a namespace/name
 // string which is then put onto the work queue. This method should *not* be
 // passed resources of any type other than CRD.
@@ -132,6 +163,47 @@ func (c *Controller) enqueueCRD(obj interface{}) {
 		return
 	}
 	c.workqueue.Add(key)
+}
+
+// processNextWorkItem will read a single work item off the workqueue and
+// attempt to process it, by calling the syncHandler.
+func (c *Controller) processNextWorkItem(ctx context.Context) bool {
+	obj, quit := c.workqueue.Get()
+	if quit {
+		return false
+	}
+	logger := klog.FromContext(ctx)
+
+	err := func(object interface{}) error {
+
+		defer c.workqueue.Done(object)
+		var (
+			key string
+			ok  bool
+		)
+
+		if key, ok = object.(string); !ok {
+			c.workqueue.Forget(object)
+			utilruntime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", object))
+			return nil
+		}
+
+		if err := c.syncHandler(ctx, key); err != nil {
+			c.workqueue.AddRateLimited(key)
+			return fmt.Errorf("error syncing '%s': %s, requeuing", key, err.Error())
+		}
+
+		c.workqueue.Forget(object)
+		logger.Info("Successfully synced", "resourceName", key)
+		return nil
+	}(obj)
+
+	if err != nil {
+		utilruntime.HandleError(err)
+		return true
+	}
+
+	return true
 }
 
 // handleObject will take any resource implementing metav1.Object and attempt
@@ -180,4 +252,94 @@ func (c *Controller) handleObject(obj interface{}) {
 	}
 }
 
-// TODO
+// syncHandler 处理
+func (c *Controller) syncHandler(ctx context.Context, key string) error {
+	// get namesapce and name from key
+	namespace, name, err := cache.SplitMetaNamespaceKey(key)
+	if err != nil {
+		utilruntime.HandleError(fmt.Errorf("invalid resource key %s", key))
+		return nil
+	}
+
+	// get the CRD resource by namespace/name
+	crd, err := c.customResourceLister.Redises(namespace).Get(name)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			utilruntime.HandleError(fmt.Errorf("resource %s in work queue no longer exists", key))
+			return nil
+		}
+
+		return err
+	}
+
+	// get deployment name of the crd
+	deploymentName := crd.Spec.DeploymentName
+	if deploymentName == "" {
+		utilruntime.HandleError(fmt.Errorf("%s deployment name must be specified", key))
+		return nil
+	}
+
+	// create/update the deployment for the CRD
+	deployment, err := c.deploymentLister.Deployments(crd.Namespace).Get(deploymentName)
+	if k8serrors.IsNotFound(err) {
+		deployment, err = c.k8sClientSet.AppsV1().Deployments(crd.Namespace).Create(context.TODO(), newDeployment(crd), metav1.CreateOptions{})
+		if err != nil {
+			utilruntime.HandleError(fmt.Errorf("create deployment %s %s failed", crd.Namespace, deploymentName))
+		}
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if !metav1.IsControlledBy(deployment, crd) {
+		return fmt.Errorf("deployment %s not controlled by the resource %s", deployment.Name, crd.Name)
+	}
+
+	if crd.Spec.Replicas != nil && *crd.Spec.Replicas != *deployment.Spec.Replicas {
+		deployment, err = c.k8sClientSet.AppsV1().Deployments(crd.Namespace).Update(context.TODO(), newDeployment(crd), metav1.UpdateOptions{})
+		if err != nil {
+			return err
+		}
+	}
+
+	c.recorder.Event(crd, corev1.EventTypeNormal, "Synced", "crd synced successfully")
+	return nil
+}
+
+func newDeployment(r *customapis.Redis) *appsv1.Deployment {
+	labels := map[string]string{
+		"app": "redis",
+	}
+
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.Spec.DeploymentName,
+			Namespace: r.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				*metav1.NewControllerRef(r, customapis.SchemeGroupVersion.WithKind(consts.CRDKind)),
+			},
+		},
+
+		Spec: appsv1.DeploymentSpec{
+			Replicas: r.Spec.Replicas,
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: labels,
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Image: r.Spec.Image,
+							Name:  "test",
+						},
+					},
+				},
+			},
+		},
+	}
+	return deploy
+}

@@ -25,6 +25,12 @@ spec:
                   type: integer
                 password:
                   type: string
+                deploymentName:
+                  type: string
+                replicas:
+                  type: integer
+                  minimum: 1
+                  maximum: 4
   scoped: Namespaced
   names:
     # 名称的复数形式，用于URL:/apis/<组>/<版本>/<名称的复数形式>
