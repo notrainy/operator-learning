@@ -3,7 +3,9 @@ kind: Redis
 metadata:
   name: redis-cluster
 spec:
-  image: busybox:latest
+  image: nginx:latest
+  replicas: 2
+  deploymentName: redis-deployment
   port: 6379
   targetPort: 16379
   password: abcde

@@ -119,6 +119,8 @@ func NewController(
 		DeleteFunc: controller.handleObject,
 	})
 
+	logger.Info("handlers setted")
+
 	return controller
 }
 
@@ -184,7 +186,7 @@ func (c *Controller) processNextWorkItem(ctx context.Context) bool {
 
 		if key, ok = object.(string); !ok {
 			c.workqueue.Forget(object)
-			utilruntime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", object))
+			utilruntime.HandleError(fmt.Errorf("expected string in workqueue but got %v", object))
 			return nil
 		}
 
